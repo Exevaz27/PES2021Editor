@@ -1,0 +1,363 @@
+--[[
+fl26chain -- loader for fl26chain.dll: completes a promotion/relegation chain deeper than two
+tiers at season end. The CHAINS and PROTECT lists below are OUR test world's (third, fourth
+and fifth divisions under Ligue 2 and Serie B, ids 180..185) -- replace them with your own
+league ids before you load this, or let a world file supply them (see below).
+
+Why: the game's season-end pass exchanges clubs between a league and the league below it
+only once per pass, and the middle tier of a chain is skipped because the tier above already
+produced its list (docs/season-rollover-decode.md). The DLL hooks the apply step, reads the
+final standings of the middle and bottom tier through the game's own functions, moves the
+bottom DEMOTE clubs of the middle tier down and the top PROMOTE eligible clubs of the bottom
+tier up, and re-writes both lists through the game's own list writer. Nothing else is touched.
+
+Configure CHAINS below: {middle league id, bottom league id, demote from middle, promote
+from bottom}. The counts must match the promotion/relegation counts in fl26comptab.lua
+(COUNTS[middle][2] and COUNTS[bottom][1]) so the top<->middle exchange and ours agree.
+
+Log: the DLL keeps a small text log; this loader drains it into sider.log on every tick
+and on F10. It keeps a small observation ring in the code section's spare tail at
+0x14252e900..0x14252ea08.
+
+The world file. When SiderAddons\modules\fl26world.txt exists (written by FL26 Mod Studio's
+League Builder), CHAINS and PROTECT below are ignored and both are built from the file:
+every league in it is protected, and a chain pair is made for every league on division 3, 5,
+6 or 7 that names the league above it -- exactly the pairs the game's mover skips -- with the
+league's promote count (3 if it gives none) both ways. Without the file the built-in lists
+below are used, as before.
+
+Requires sider.ini: luajit.ext.enabled = 1 (global ffi). Sider's sandbox has no pcall/require.
+--]]
+
+local m = {}
+
+-- middle -> bottom: 3 down, 3 up. The game's mover exchanges only every other pair of a chain
+-- (A<->B, then C<->D), so each pair it skips is listed here: Serie B (82) -> 183 is skipped
+-- because Serie A's visit already wrote Serie B, and Ligue 2 (81) -> 180 for the same reason
+-- with Ligue 1. (Ligue 2 used to lack a season table here; that was fl26hdr192 missing the
+-- table-state byte at 0x14159edca, fixed there.)
+-- In the league-size world (sider/experimental/README.md, the European format) regulation 174
+-- is a third division below the Championship; there, add { 79, 174, 3, 3 } as a fifth chain.
+-- Do not add it anywhere else: in a world where 174 is a first division it would move clubs
+-- between the Championship and that league. Up to 8 chains.
+local CHAINS = { { 81, 180, 3, 3 }, { 82, 183, 3, 3 }, { 181, 182, 3, 3 }, { 184, 185, 3, 3 } }
+
+-- Our regulations (the fl26joindll list). None of them may be rewritten with an EMPTY club
+-- list while it holds clubs: on 2026-09-22 the New Year pass of the calendar-year world did
+-- exactly that to 76, 93, 94, 96, 98 and 162 in the middle of their August-May season.
+local PROTECT = { 11, 49, 60, 61, 62, 74, 76, 93, 94, 96, 98, 100, 109, 110, 111, 112, 113, 114,
+                  121, 138, 139, 140, 143, 144, 145, 146, 170, 171, 173, 174, 176,
+                  178, 179, 180, 181, 182, 183, 184, 185, 190 }
+
+-- The world file: modules\fl26world.txt, written by FL26 Mod Studio's League Builder.
+-- One table per league -- id, then whatever the line gives: cid, region, country, slot, tier,
+-- above, promote, demote, clubs, legs, cup (numbers), name (text) -- in file order. nil when
+-- there is no file: the module then keeps the built-in lists above.
+-- carry=0 splits (Apertura/Clausura): {regular phase, second phase}, for the standings the
+-- total never gets (GitHub #106)
+local APCLAU = {}
+local function read_world(ctx)
+  local sep = string.char(92)
+  local path = ctx.sider_dir:gsub("[/" .. sep .. "]+$", "") .. sep .. "modules" .. sep .. "fl26world.txt"
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local leagues, splits = {}, {}
+  for line in f:lines() do
+    local sid = line:match("^%s*split%s+(%d+)")
+    if sid then
+      splits[tonumber(sid)] = tonumber(line:match("regular=(%d+)")) or 0
+      local g = tonumber(line:match("groups=(%d+)"))
+      if line:match("carry=0") and g and splits[tonumber(sid)] > 0 then
+        APCLAU[#APCLAU + 1] = { splits[tonumber(sid)], g }
+      end
+    end
+    local id, rest = line:match("^%s*league%s+(%d+)(.*)$")
+    if id then
+      local L = { id = tonumber(id) }
+      local name = rest:match("%sname=(.-)%s*$")
+      if name then L.name = name; rest = rest:gsub("%sname=.*$", "") end
+      for k, v in rest:gmatch("(%a+)=(%-?%d+)") do L[k] = tonumber(v) end
+      leagues[#leagues + 1] = L
+    end
+  end
+  f:close()
+  for _, L in ipairs(leagues) do L.splitabove = L.above ~= nil and splits[L.above] or nil end
+  return leagues
+end
+
+-- From the world file: every league is protected, and a chain entry is made for each pair the
+-- game's mover skips. The mover exchanges a league with the one below it every other pair,
+-- starting at the top (1<->2, 3<->4, ...), so the pairs it skips are the ones whose lower
+-- league is division 3, 5 or 7 -- and 6 (B256: the mover never wrote 5<->6 either; the DLL
+-- leaves a pair the game did move as it is): {league above, league, its promote count both
+-- ways}. The league
+-- above may be a shipped one (Ligue 2 above a French third division) -- it is named by id, not
+-- looked up.
+-- A league line with cup= is a second division under a shipped top flight that had none:
+-- {that country's cup, the league above, this league}. The DLL keeps the cup to the top
+-- league's clubs (GitHub #21: the game would put this league into it, or only this league).
+-- With cupall=1 the cup takes both leagues instead (GitHub #32), the builder having checked
+-- that the cup's calendar dates every round of that field.
+-- cuptop= and cuplow= on a division 3 or lower under a shipped league (Evo-Web 2026-10-01: League
+-- One, Two and the National League under the Championship, and the FA Cup went to League One
+-- and Two -- the game takes the region's lowest regulation id, ours) name the two shipped
+-- divisions the cup has in the game: {cup, top, second, both}.
+-- scup= on the same line is that country's super cup (GitHub #29): {super cup, the league
+-- above -- the top flight, cuptop=, for a division 3 or lower --, this league}; the DLL swaps a
+-- club of this league out of it.
+-- cupn= caps the cup's field (GitHub #74): the bracket screen draws a cup of 32 or fewer only
+-- for 2-16, 18, 20, 24, 28 or 30 clubs, and the game fills the cup from the leagues, not from
+-- its entry list -- so the DLL writes the top league's clubs and the first ones below, cupn in
+-- all. A world's own national cup comes as cup=, cuptop=, cuplow= (0 = no league below) and
+-- cupall=1 on its top league's line.
+local function from_world(world)
+  local chains, protect, cups, scups, lcups = {}, {}, {}, {}, {}
+  for _, L in ipairs(world) do
+    protect[#protect + 1] = L.id
+    -- A league below a split one (GitHub #79/#81, Egypt 2026-10-06): the game's mover writes
+    -- nothing between a split league's total and the league below, so no club moved at all.
+    -- The pair goes to the DLL like a skipped one; the total's season table is the standings.
+    -- B256 (jibibi 2026-10-27): a sixth tier too -- the pass writes the fifth as the low end of
+    -- the pair above it and never as the top of the one below, so nobody moved between them
+    if L.above and L.tier and ((L.tier >= 3 and (L.tier % 2 == 1 or L.tier >= 6)) or L.splitabove) then
+      local n = L.promote or 3
+      -- the split's regular phase rides along: it plays the season the total's list decides
+      chains[#chains + 1] = { L.above, L.id, n, n, L.splitabove or 0 }
+    elseif L.above and L.splittotal then
+      -- under the regular phase of a SHIPPED split season (Belgian Challenger Pro League under
+      -- the Jupiler Pro League, 2026-10-16): the game's season end runs on the total, whose
+      -- relegation link is empty, so the pair goes to the DLL over the total, the phase along
+      local n = L.promote or 3
+      chains[#chains + 1] = { L.splittotal, L.id, n, n, L.above }
+    end
+    if L.cup and L.cuptop and L.cuplow then
+      -- cupthird= (B228): the first clubs of this league, a new third division, join the two
+      -- shipped ones in the cup, cupn in all (the Coupe de France of L1, L2 and National, 48)
+      cups[#cups + 1] = { L.cup, L.cuptop, L.cuplow, L.cupall ~= 0, L.cupn, L.cupthird }
+    elseif L.cup and L.above then
+      cups[#cups + 1] = { L.cup, L.above, L.id, L.cupall == 1, L.cupn }
+    end
+    -- lcup= is the league's own league cup (a single-match knockout, the world's ccup like=): the
+    -- game fills it from the region's lowest league id, not its entry list (Erax 2026-10-15: 22
+    -- clubs of the second division in a cup of 32 -> Fixtures crashed, #74). Both leagues, top
+    -- first, lcupn in all. lcuptop= names the top league when it is the game's (a league cup of a
+    -- league of the game on a line of ours, B122: our League One, reg 11, took the Carabao Cup)
+    if L.lcup and L.lcupn then
+      lcups[#lcups + 1] = { L.lcup, L.lcuptop or L.id, L.lcuplow or 0, true, L.lcupn }
+    end
+    -- below a shipped second division the clubs put back come from the top flight (cuptop=)
+    if L.scup and L.above then scups[#scups + 1] = { L.scup, L.cuptop or L.above, L.id } end
+  end
+  -- the league cups after every national cup: fl26chain.dll keeps MAX_CUPS (128) and drops the
+  -- rest, so a world with more keeps the national cups it kept before the league cups came
+  for _, c in ipairs(lcups) do cups[#cups + 1] = c end
+  return chains, protect, cups, scups
+end
+
+local MAX_CUPS = 128                                 -- fl26chain.c MAX_CUPS (16 before B178)
+local MAX_CHAINS = 32                               -- fl26chain.c MAX_CHAINS (8 before B186)
+
+local CAVE_VA, CAVE_PAGE, CAVE_LEN = 0x14252e900, 0x14252e000, 0x108
+local PAGE_EXECUTE_READWRITE = 0x40
+
+local dll_log, dll_stats, logbuf, statbuf, cfg
+local ticks = 0
+
+local function drain(reason)
+  if not dll_log then return end
+  local n = tonumber(dll_log(logbuf, 4096))
+  if n > 0 then
+    for line in ffi.string(logbuf, n):gmatch("[^\n]+") do log("fl26chain: " .. line) end
+  end
+  if reason then
+    dll_stats(statbuf)
+    log(string.format("fl26chain: %s -- applies %d, fixes %d, refused %d, anomalies %d", reason,
+                      tonumber(statbuf[0]), tonumber(statbuf[1]), tonumber(statbuf[2]), tonumber(statbuf[3])))
+  end
+end
+
+function m.make_key(ctx, filename)
+  ticks = ticks + 1
+  if ticks % 32 == 0 then drain(nil) end
+  return nil
+end
+
+function m.key_down(ctx, vkey)
+  if vkey == 0x79 then drain("F10 report") end      -- F10
+end
+
+-- B294 (Pelda 30.10.): ctx.sider_dir is UTF-8, and LoadLibraryA reads a name in the system's
+-- code page: with the game in a folder named with a Czech u-ring, no DLL of ours loaded (error 126)
+-- and the leagues had no fixtures. LoadLibraryW takes any folder name. The wide calls are declared
+-- under this module's own names (as fl26slotnames does), so no other module's declaration can clash.
+local function load_dll(path)
+  local n = ffi.C.fl26chain_MultiByteToWideChar(65001, 0, path, -1, nil, 0)
+  if n > 0 then
+    local w = ffi.new("uint16_t[?]", n)
+    ffi.C.fl26chain_MultiByteToWideChar(65001, 0, path, -1, w, n)
+    local h = ffi.C.fl26chain_LoadLibraryW(w)
+    if h ~= nil then return h end
+  end
+  return ffi.C.LoadLibraryA(path)
+end
+
+function m.init(ctx)
+  if ffi == nil then log("fl26chain: global ffi is nil -- set luajit.ext.enabled = 1"); return end
+  ffi.cdef([[
+    void*    LoadLibraryA(const char*);
+    void*    fl26chain_LoadLibraryW(const uint16_t*) __asm__("LoadLibraryW");
+    int      fl26chain_MultiByteToWideChar(unsigned int, unsigned long, const char*, int, uint16_t*, int) __asm__("MultiByteToWideChar");
+    void*    GetProcAddress(void*, const char*);
+    void*    GetModuleHandleA(const char*);
+    unsigned long GetLastError(void);
+    int      VirtualProtect(void*, size_t, uint32_t, uint32_t*);
+    typedef struct { uint16_t mid, low; uint8_t demote_mid, promote_low; uint16_t regular; } fl26_chain_cfg_t;
+    typedef int  (*fl26_chain_install_t)(uint64_t, uint64_t, const fl26_chain_cfg_t*, int);
+    typedef int  (*fl26_chain_log_t)(char*, int);
+    typedef void (*fl26_chain_stats_t)(uint32_t*);
+    typedef int  (*fl26_chain_protect_t)(const uint16_t*, int);
+    typedef int  (*fl26_chain_cups_t)(const uint16_t*, int);
+    typedef int  (*fl26_chain_cupsize_t)(const uint16_t*, int);
+    typedef int  (*fl26_chain_cupthird_t)(const uint16_t*, int);
+    typedef int  (*fl26_chain_apclau_t)(const uint16_t*, int);
+  ]])
+
+  local old = ffi.new("uint32_t[1]")
+  if ffi.C.VirtualProtect(ffi.cast("void*", CAVE_PAGE), 0x1000, PAGE_EXECUTE_READWRITE, old) == 0 then
+    log("fl26chain: VirtualProtect(cave) failed -- aborting"); return
+  end
+  memory.write(CAVE_VA, string.rep("\0", CAVE_LEN))
+
+  local sep = string.char(92)
+  local dllpath = ctx.sider_dir:gsub("[/" .. sep .. "]+$", "") .. sep .. "modules" .. sep .. "fl26chain.dll"
+  local h = load_dll(dllpath)
+  if h == nil then
+    log(string.format("fl26chain: LoadLibraryA failed (err %d): %s", tonumber(ffi.C.GetLastError()), dllpath)); return
+  end
+  local pi, pl, ps = ffi.C.GetProcAddress(h, "fl26_chain_install"), ffi.C.GetProcAddress(h, "fl26_chain_log"), ffi.C.GetProcAddress(h, "fl26_chain_stats")
+  if pi == nil or pl == nil or ps == nil then log("fl26chain: GetProcAddress failed"); return end
+  local install = ffi.cast("fl26_chain_install_t", pi)
+  dll_log   = ffi.cast("fl26_chain_log_t", pl)
+  dll_stats = ffi.cast("fl26_chain_stats_t", ps)
+  logbuf, statbuf = ffi.new("char[4096]"), ffi.new("uint32_t[4]")
+
+  local world, CUPS, SCUPS = read_world(ctx), {}, {}
+  if world then
+    CHAINS, PROTECT, CUPS, SCUPS = from_world(world)
+    for i = #CUPS, MAX_CUPS + 1, -1 do
+      log(string.format("fl26chain: cup %d -- more than %d cups in the world, left to the game", CUPS[i][1], MAX_CUPS))
+      CUPS[i] = nil
+    end
+    -- more pairs than the DLL takes refused them all (status 9) and left every chain and the
+    -- empty-list guard out (B186, Europack eu4: 10 pairs, 8 taken): keep the first ones
+    for i = #CHAINS, MAX_CHAINS + 1, -1 do
+      log(string.format("fl26chain: chain %d -> %d -- more than %d chain pairs in the world, left to the game", CHAINS[i][1], CHAINS[i][2], MAX_CHAINS))
+      CHAINS[i] = nil
+    end
+    log(string.format("fl26chain: world file -- %d leagues, %d chain pair(s) the game skips", #PROTECT, #CHAINS))
+  end
+  cfg = ffi.new("fl26_chain_cfg_t[?]", math.max(#CHAINS, 1))
+  for i, c in ipairs(CHAINS) do
+    cfg[i - 1].mid, cfg[i - 1].low, cfg[i - 1].demote_mid, cfg[i - 1].promote_low = c[1], c[2], c[3], c[4]
+    cfg[i - 1].regular = c[5] or 0
+  end
+
+  local base = ffi.cast("uint64_t", ffi.C.GetModuleHandleA(nil))
+  local status = tonumber(install(base, CAVE_VA, cfg, #CHAINS))
+  if status == 0 then
+    local pp = ffi.C.GetProcAddress(h, "fl26_chain_protect")
+    if pp ~= nil then
+      local ids = ffi.new("uint16_t[?]", #PROTECT)
+      for i, v in ipairs(PROTECT) do ids[i - 1] = v end
+      ffi.cast("fl26_chain_protect_t", pp)(ids, #PROTECT)
+    else
+      log("fl26chain: this fl26chain.dll has no empty-list guard (fl26_chain_protect)")
+    end
+    if #CUPS > 0 then
+      local pc = ffi.C.GetProcAddress(h, "fl26_chain_cups")
+      if pc ~= nil then
+        local t = ffi.new("uint16_t[?]", 3 * #CUPS)
+        for i, c in ipairs(CUPS) do
+          t[3 * i - 3], t[3 * i - 2], t[3 * i - 1] = c[4] and c[1] + 0x8000 or c[1], c[2], c[3]
+          if c[4] then
+            log(string.format("fl26chain: live -- cup %d takes the clubs of %d and of %d below it", c[1], c[2], c[3]))
+          else
+            log(string.format("fl26chain: live -- cup %d keeps the clubs of %d, not of %d below it", c[1], c[2], c[3]))
+          end
+        end
+        ffi.cast("fl26_chain_cups_t", pc)(t, #CUPS)
+        local sized = {}
+        for _, c in ipairs(CUPS) do if c[5] then sized[#sized + 1] = c end end
+        if #sized > 0 then
+          local pz = ffi.C.GetProcAddress(h, "fl26_chain_cupsize")
+          if pz ~= nil then
+            local z = ffi.new("uint16_t[?]", 2 * #sized)
+            for i, c in ipairs(sized) do
+              z[2 * i - 2], z[2 * i - 1] = c[1], c[5]
+              log(string.format("fl26chain: live -- cup %d takes at most %d clubs", c[1], c[5]))
+            end
+            ffi.cast("fl26_chain_cupsize_t", pz)(z, #sized)
+          else
+            log("fl26chain: this fl26chain.dll cannot cap a cup's field (no fl26_chain_cupsize) -- rebuild it")
+          end
+        end
+        local third = {}
+        for _, c in ipairs(CUPS) do if c[6] and c[6] > 0 then third[#third + 1] = c end end
+        if #third > 0 then
+          local p3 = ffi.C.GetProcAddress(h, "fl26_chain_cupthird")
+          if p3 ~= nil then
+            local z = ffi.new("uint16_t[?]", 2 * #third)
+            for i, c in ipairs(third) do
+              z[2 * i - 2], z[2 * i - 1] = c[1], c[6]
+              log(string.format("fl26chain: live -- cup %d also takes the first clubs of %d", c[1], c[6]))
+            end
+            ffi.cast("fl26_chain_cupthird_t", p3)(z, #third)
+          else
+            log("fl26chain: this fl26chain.dll cannot put a third division in a cup (no fl26_chain_cupthird) -- rebuild it")
+          end
+        end
+      else
+        log("fl26chain: this fl26chain.dll cannot keep a cup to its league (no fl26_chain_cups) -- rebuild it")
+      end
+    end
+    if #APCLAU > 0 then
+      local pa = ffi.C.GetProcAddress(h, "fl26_chain_apclau")
+      if pa ~= nil then
+        local t = ffi.new("uint16_t[?]", 2 * #APCLAU)
+        for i, a in ipairs(APCLAU) do
+          t[2 * i - 2], t[2 * i - 1] = a[1], a[2]
+          log(string.format("fl26chain: live -- Apertura %d + Clausura %d count as one table for promotion", a[1], a[2]))
+        end
+        ffi.cast("fl26_chain_apclau_t", pa)(t, #APCLAU)
+      else
+        log("fl26chain: this fl26chain.dll cannot count an Apertura/Clausura table (no fl26_chain_apclau) -- rebuild it")
+      end
+    end
+    if #SCUPS > 0 then
+      local ps2 = ffi.C.GetProcAddress(h, "fl26_chain_supercups")
+      if ps2 ~= nil then
+        local t = ffi.new("uint16_t[?]", 3 * #SCUPS)
+        for i, c in ipairs(SCUPS) do
+          t[3 * i - 3], t[3 * i - 2], t[3 * i - 1] = c[1], c[2], c[3]
+          log(string.format("fl26chain: live -- super cup %d takes no club of %d (only of %d)", c[1], c[3], c[2]))
+        end
+        ffi.cast("fl26_chain_cups_t", ps2)(t, #SCUPS)
+      else
+        log("fl26chain: this fl26chain.dll cannot keep a super cup free of a new league (no fl26_chain_supercups) -- rebuild it")
+      end
+    end
+    for _, c in ipairs(CHAINS) do
+      log(string.format("fl26chain: live -- chain %d -> %d: %d down, %d up at season end (F10 = report)", c[1], c[2], c[3], c[4]))
+    end
+    ctx.register("livecpk_make_key", m.make_key)
+    ctx.register("key_down", m.key_down)
+    drain(nil)
+  else
+    local msg = ({ [2] = "set-hook signature mismatch", [3] = "VirtualAlloc failed", [4] = "VirtualProtect failed",
+                   [12] = "apply-hook signature mismatch", [13] = "VirtualAlloc failed", [14] = "VirtualProtect failed",
+                   [9] = "bad config" })[status] or "unknown"
+    log("fl26chain: install FAILED (status " .. status .. ") -- " .. msg .. ". The game is unmodified.")
+  end
+end
+
+return m
