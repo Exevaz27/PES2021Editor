@@ -53,10 +53,21 @@ namespace PesEditorWeb
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "No se pudo iniciar el motor web (WebView2). En Windows 11 viene con Edge; " +
-                    "si falta, instalalo desde la web de Microsoft.\n\nDetalle: " + ex.Message,
-                    "PES 2021 EDITOR PRO", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                string msg;
+                if (ex.HResult == unchecked((int)0x800700AA))
+                {
+                    // ERROR_BUSY: la carpeta de datos del motor quedo tomada por otro
+                    // proceso (una copia anterior que no cerro del todo).
+                    msg = "El motor web está ocupado por otro proceso.\n\n" +
+                        "Cerrá todas las ventanas del editor y esperá unos segundos. Si sigue pasando, " +
+                        "abrí el Administrador de tareas y finalizá los procesos 'PES2021EditorWeb' o 'msedgewebview2' que hayan quedado colgados.\n\nDetalle: " + ex.Message;
+                }
+                else
+                {
+                    msg = "No se pudo iniciar el motor web (WebView2). En Windows 11 viene con Edge; " +
+                        "si falta, instalalo desde la web de Microsoft.\n\nDetalle: " + ex.Message;
+                }
+                MessageBox.Show(msg, "PES 2021 EDITOR PRO", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
@@ -67,7 +78,7 @@ namespace PesEditorWeb
 
             string www = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "www");
             core.SetVirtualHostNameToFolderMapping("pesapp.local", www, CoreWebView2HostResourceAccessKind.Allow);
-            core.Navigate("https://pesapp.local/index.html?v=per34-20261106");
+            core.Navigate("https://pesapp.local/index.html?v=per38-20261106");
         }
 
         private void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs args)
@@ -100,7 +111,7 @@ namespace PesEditorWeb
             switch (action)
             {
                 case "ping":
-                    return new Dictionary<string, object> { { "ok", true }, { "app", "PES 2021 EDITOR PRO" }, { "shell", "web-5.1-creditos" } };
+                    return new Dictionary<string, object> { { "ok", true }, { "app", "PES 2021 EDITOR PRO" }, { "shell", "beta-1" } };
 
                 case "pickFolder":
                     using (var dlg = new FolderBrowserDialog())

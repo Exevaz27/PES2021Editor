@@ -1,0 +1,13 @@
+FIX 3 (beta-1) — SOLO LOS ARCHIVOS EDITADOS
+
+Cómo subirlos al repo (cada archivo reemplaza al anterior, no se duplica):
+
+1) PES2021EditorWeb.exe  → portada del repo → Add file → Upload files → arrastrar → Confirmar.
+2) Carpeta src (Program.cs y WebHostForm.cs) → entrá a la carpeta src del repo → Add file → Upload files → arrastrar los 2 → Confirmar.
+3) www/index.html → entrá a la carpeta www del repo → Add file → Upload files → arrastrar → Confirmar.
+
+Qué cambia: instancia única (si el editor ya está abierto, la segunda copia avisa en vez de
+explotar con el error 0x800700AA) y mensaje claro para ese error si un proceso quedó colgado.
+
+La RELEASE es distinta: el asset es un zip entero, así que ese sí va completo
+(2_REEMPLAZAR_EN_LA_RELEASE_beta1_fix3.zip, ya entregado).
