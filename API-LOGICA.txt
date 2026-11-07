@@ -1,0 +1,146 @@
+##### DatabaseManager
+25:    public class DatabaseManager
+29:        public string DatabasePath { get; private set; }
+31:        public List<CompetitionRecord> Competitions { get; private set; }
+33:        public List<RegulationRecord> Regulations { get; private set; }
+35:        public List<EntryRecord> Entries { get; private set; }
+36:        public List<TeamRecord> Teams { get; private set; }
+37:        public List<CountryRecord> Countries { get; private set; }
+38:        public List<CoachRecord> Coaches { get; private set; }
+39:        public List<StadiumRecord> Stadiums { get; private set; }
+40:        public List<DerbyRecord> Derbies { get; private set; }
+41:        public List<PlayerRecord> Players { get; private set; }
+42:        public List<PlayerAssignmentRecord> PlayerAssignments { get; private set; }
+43:        public List<TacticsRecord> Tactics { get; private set; }
+44:        public List<TacticsFormationRecord> TacticsFormations { get; private set; }
+46:        public Dictionary<uint, TeamRecord> TeamsById { get; private set; }
+47:        public Dictionary<ushort, CountryRecord> CountriesById { get; private set; }
+48:        public Dictionary<uint, CoachRecord> CoachesById { get; private set; }
+49:        public Dictionary<ushort, StadiumRecord> StadiumsById { get; private set; }
+50:        public Dictionary<uint, PlayerRecord> PlayersById { get; private set; }
+51:        public Dictionary<uint, List<PlayerAssignmentRecord>> PlayerAssignmentsByTeam { get; private set; }
+52:        public Dictionary<uint, List<TacticsRecord>> TacticsByClub { get; private set; }
+53:        public Dictionary<uint, List<TacticsFormationRecord>> FormationsByTacticsKey { get; private set; }
+54:        public Dictionary<byte, List<EntryRecord>> EntriesByCompetition { get; private set; }
+55:        public Dictionary<byte, RegulationRecord> RegulationsByCompetition { get; private set; }
+56:        public Dictionary<uint, int> PlayersPerTeam { get; private set; }
+57:        public Dictionary<byte, ushort> CustomLeagueCountries { get; private set; }
+58:        public Dictionary<byte, byte> LeagueSeasonType { get; private set; }
+59:        public Dictionary<byte, ushort> LeagueLinkedCup { get; private set; }
+60:        public Dictionary<byte, ushort> LeagueLinkedSuperCup { get; private set; }
+61:        public Dictionary<byte, bool> LeagueCupAllDivisions { get; private set; }
+63:        public bool HasUnsavedChanges { get; set; }
+65:        public List<string> LoadWarnings { get { return _loadWarnings; } }
+69:        public List<string> LastCsvSkippedTeams { get; private set; }
+88:        public DatabaseManager()
+127:        public Func<string, bool> ConfirmExternalWrite { get; set; }
+136:        public void SetLeagueCountry(byte compId, ushort countryId)
+195:        public static byte GetDefaultRegionForCountry(ushort countryId)
+299:        public string GetLiveCpkRoot()
+345:        public Image GetCompetitionEmblem(int compId)
+401:        public void SaveCompetitionEmblem(int compId, Image sourceImage)
+437:        public bool DeleteCompetitionEmblem(int compId)
+451:        public Image GetTeamEmblem(uint teamId)
+503:        public void SaveTeamEmblem(uint teamId, Image emblemImage)
+524:        public void Load(string folderPath)
+875:                public static readonly string[] DatabaseFilesToBackup = new string[]
+936:        public string CreateTimestampedBackup(string folderPath)
+973:        public static void AtomicWriteFile(string targetPath, byte[] data)
+1005:        public static void AtomicWriteText(string targetPath, string content, Encoding encoding)
+1012:        public List<byte> GetAvailableCompetitionIds()
+1072:        public ushort GetNextRegulationId()
+1097:        public ushort GetNextEntryId()
+1119:        public int GetPlayerCount(uint teamId)
+1133:        public uint GetNextFreeTeamId()
+1157:        public const uint ClassicEuropeTeamId = 2703;
+1158:        public const uint ClassicWorldTeamId = 2704;
+1159:        public const byte ClassicTeamsCompetitionId = 53;
+1160:        public const ushort ClassicTeamsRegulationId = 182;
+1190:        public List<TeamRecord> GetFreeTeams()
+1200:        public List<TeamRecord> GetFreePlayableTeams(byte continent = 0)
+1264:        public bool IsTeamOccupied(uint teamId, out byte compId, out string compName)
+1294:        public List<TeamRecord> GenerateAndAddCustomTeams(int count, string namePrefix, ushort countryId)
+1378:        public TeamRecord CloneTeam(uint originalTeamId, string customName)
+1404:        public TeamRecord CreateNewTeam(string nameSpanish, string nameEnglish, string shortName, ushort countryId, ushort stadiumId = 0, uint coachId = 0, byte targetCompId = 0, uint explicitId = 0)
+1475:        public bool DeleteTeam(uint teamId)
+1564:        public void UpdateTeamRecord(TeamRecord t, string nameSpanish, string nameEnglish, string shortName, ushort countryId, ushort stadiumId, uint coachId, bool isNational)
+1580:        public void UpdateTeamRecordFull(TeamRecord t, string nameSpanish, string nameEnglish, string shortName, ushort countryId, ushort stadiumId, uint coachId, bool isNational, uint r1, uint r2, uint r3)
+1604:        public List<uint> GetTeamRivals(uint teamId)
+1629:        public void SetTeamRivals(uint teamId, uint r1, uint r2, uint r3)
+1661:        public List<PlayerAssignmentRecord> GetTeamRoster(uint teamId)
+1671:        public PlayerRecord GetPlayer(uint playerId)
+1679:        public bool ChangePlayerShirtNumber(uint teamId, uint playerId, int newShirtNumber)
+1698:        public bool TransferPlayer(uint playerId, uint fromTeamId, uint toTeamId)
+1769:        public uint SuggestNextFreePlayerId()
+1779:        public PlayerRecord CreatePlayer(string name, string posName, int ovr, ushort natId, uint clubId = 0)
+1838:        public PlayerRecord ClonePlayer(PlayerRecord source)
+1868:        public bool DeletePlayer(uint playerId)
+1885:        public bool ReleasePlayer(uint playerId, uint currentTeamId)
+1909:        public bool SignFreeAgent(uint playerId, uint toTeamId, int shirtNumber = 0)
+1977:        public List<PlayerRecord> GetFreeAgents(string searchFilter = "", int limit = 200)
+1992:        public bool AutoAssignRoles(uint teamId)
+2048:        public string ExportTeamsToCsv(string outputPath)
+2114:        public int ImportTeamsFromCsv(string csvPath)
+2211:        public List<TeamRecord> BatchCreateTeams(int count, string namePrefix, ushort countryId, byte targetCompId)
+2225:        public static readonly Dictionary<byte, int> VanillaCompSlots = new Dictionary<byte, int>
+2279:        public static readonly Dictionary<byte, ushort> VanillaCompCountries = new Dictionary<byte, ushort>
+2333:        public ushort GetLeagueCountryId(byte compId)
+2435:        public int GetLeagueTier(byte compId)
+2491:        public Dictionary<byte, int> LeaguePromoteCount = new Dictionary<byte, int>();
+2493:        public Dictionary<byte, int> LeagueDemoteCount = new Dictionary<byte, int>();
+2495:        public Dictionary<byte, int> LeagueContinental1Count = new Dictionary<byte, int>();
+2497:        public Dictionary<byte, int> LeagueContinental2Count = new Dictionary<byte, int>();
+2499:        public int GetLeaguePromote(byte compId)
+2511:        public void SetLeaguePromote(byte compId, int count)
+2521:        public int GetLeagueDemote(byte compId)
+2543:        public void SetLeagueDemote(byte compId, int count)
+2553:        public int GetLeagueContinental1(byte compId)
+2576:        public void SetLeagueContinental1(byte compId, int count)
+2605:        public int GetLeagueContinental2(byte compId)
+2615:        public void SetLeagueContinental2(byte compId, int count)
+2625:        public byte GetLeagueSeasonType(byte compId)
+2639:        public void SetLeagueSeasonType(byte compId, byte seasonType)
+2651:        public ushort GetLeagueLinkedCup(byte compId)
+2677:        public void SetLeagueLinkedCup(byte compId, ushort cupRegId)
+2689:        public ushort GetLeagueLinkedSuperCup(byte compId)
+2715:        public void SetLeagueLinkedSuperCup(byte compId, ushort scupRegId)
+2727:        public static bool IsCalendarYearCountry(ushort countryId)
+2796:        public List<CompetitionRecord> GetAvailableDomesticCups(ushort countryId = 0)
+2842:        public List<CompetitionRecord> GetAvailableSuperCups(ushort countryId = 0)
+2931:        public static string[] GetThemedClubNames(ushort countryId, int count)
+2972:        public static string GenerateShortName(string fullName, int index)
+3022:        public LeaguePyramidSystem GetPyramidForCountry(ushort countryId)
+3251:        public List<LeaguePyramidSystem> GetAllPyramidSystems()
+3292:        public int RepairLiveCpkEmblems()
+3306:                public byte[] SerializeCustomLeagueRulesBytes()
+3362:        public void SaveCustomLeagueRules(string folderPath = null)
+3536:        public void EnsureFallbackCountries()
+3638:        public void EnsureFallbackStadiums()
+3674:        public void EnsureFallbackCoaches()
+3696:        public CoachRecord CreateNewCoach(string name, ushort countryId)
+3716:        public StadiumRecord CreateNewStadium(string name, ushort stadiumId = 0)
+3746:        public void EnsureClassicTeamsCompetition()
+3956:        public void EnsureClassicEmblems(int compId)
+3992:        public void CreateNewLeague(
+4364:        public void ApplyDiagnosticCanary(string canaryName = "LIGA ARGENTINA [MOD]")
+4394:        public static bool IsProtectedVanillaCompetition(byte compId)
+4407:        public bool DeleteLeague(byte compId)
+4546:        public bool IsLeagueParityValid(byte compId)
+4558:        public byte GetTeamContinent(TeamRecord t)
+4603:        public bool IsClubInDomesticLeague(uint teamId)
+4639:        public List<TeamRecord> GetOtherTeamsByContinent(byte continent)
+
+##### PesDbModel clases y props
+38:    public class CompetitionRecord
+118:    public class RegulationRecord
+329:    public class EntryRecord
+382:    public class TeamRecord
+543:    public class CountryRecord
+594:    public class CoachRecord
+639:    public class StadiumRecord
+678:    public class DerbyRecord
+710:    public class PlayerRecord
+902:    public class PlayerAssignmentRecord
+962:    public class TacticsRecord
+1000:    public class TacticsFormationRecord
+1060:    public class FormationPreset
